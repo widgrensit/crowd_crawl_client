@@ -10,6 +10,7 @@ import 'hero_component.dart';
 import 'enemy_component.dart';
 import 'hud.dart';
 import 'vote_overlay.dart';
+import 'combat_flash.dart';
 
 class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDetection {
   final String token;
@@ -71,10 +72,27 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
     }
   }
 
+  int _lastHeroHp = 100;
+  int _lastEnemyCount = 0;
+
   void _updateGameState(Map<String, dynamic> state) {
     gameState = state;
 
     final heroData = state['hero'] as Map<String, dynamic>? ?? {};
+    final newHp = heroData['hp'] as int? ?? _lastHeroHp;
+    final enemyList = state['enemies'] as List<dynamic>? ?? [];
+
+    // Flash red when hero takes damage
+    if (newHp < _lastHeroHp) {
+      add(CombatFlash(color: const Color(0x44ff0000)));
+    }
+    // Flash white when enemy is killed
+    if (enemyList.length < _lastEnemyCount) {
+      add(CombatFlash(color: const Color(0x33ffffff), lifetime: 0.1));
+    }
+    _lastHeroHp = newHp;
+    _lastEnemyCount = enemyList.length;
+
     hero.updateFromServer(heroData);
     hud.updateFromState(state);
 
@@ -87,15 +105,28 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
   }
 
   void _updateEnemies(List<dynamic> enemyData) {
-    for (final e in enemies) {
-      e.removeFromParent();
-    }
-    enemies.clear();
-
+    final serverIds = <int>{};
     for (final data in enemyData) {
-      final enemy = EnemyComponent.fromServer(data as Map<String, dynamic>);
-      enemies.add(enemy);
-      add(enemy);
+      final d = data as Map<String, dynamic>;
+      final id = d['id'] as int? ?? 0;
+      serverIds.add(id);
+
+      // Update existing or create new
+      final existing = enemies.where((e) => e.enemyId == id).firstOrNull;
+      if (existing != null) {
+        existing.hp = d['hp'] as int? ?? existing.hp;
+      } else {
+        final enemy = EnemyComponent.fromServer(d, enemies.length);
+        enemies.add(enemy);
+        add(enemy);
+      }
+    }
+
+    // Remove dead enemies (not in server list)
+    final dead = enemies.where((e) => !serverIds.contains(e.enemyId)).toList();
+    for (final e in dead) {
+      e.removeFromParent();
+      enemies.remove(e);
     }
   }
 

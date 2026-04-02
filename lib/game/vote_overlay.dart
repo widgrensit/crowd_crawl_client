@@ -1,5 +1,7 @@
+import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
+import 'package:flame/flame.dart';
 import 'package:flutter/material.dart';
 
 class VoteOverlay extends PositionComponent with HasGameReference, TapCallbacks {
@@ -8,6 +10,7 @@ class VoteOverlay extends PositionComponent with HasGameReference, TapCallbacks 
 
   List<Map<String, dynamic>> options = [];
   Map<String, int> tallies = {};
+  final Map<String, ui.Image> _tarotImages = {};
   String? selectedOption;
   String? winner;
   int windowMs = 15000;
@@ -18,6 +21,21 @@ class VoteOverlay extends PositionComponent with HasGameReference, TapCallbacks 
         .map((o) => o as Map<String, dynamic>)
         .toList();
     windowMs = voteData['window_ms'] as int? ?? 15000;
+  }
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    for (final option in options) {
+      final tarot = option['tarot'] as String? ?? '';
+      if (tarot.isNotEmpty) {
+        try {
+          _tarotImages[tarot] = await Flame.images.load('tarot/tarot__$tarot.png');
+        } catch (_) {
+          // Missing tarot image — will render without it
+        }
+      }
+    }
   }
 
   @override
@@ -140,28 +158,39 @@ class VoteOverlay extends PositionComponent with HasGameReference, TapCallbacks 
           ..strokeWidth = isWinner ? 3 : 1.5,
       );
 
-      // Tarot name
+      // Tarot image
       final tarot = option['tarot'] as String? ?? '';
-      tp.text = TextSpan(
-        text: tarot.toUpperCase(),
-        style: TextStyle(
-          color: isWinner ? Colors.black : const Color(0xFFc9a84c),
-          fontSize: 10,
-        ),
-      );
-      tp.layout();
-      tp.paint(canvas, Offset(cardX + (cardWidth - tp.width) / 2, cardY + 8));
+      final tarotImg = _tarotImages[tarot];
+      if (tarotImg != null) {
+        final imgDst = Rect.fromLTWH(cardX + 10, cardY + 6, cardWidth - 20, 70);
+        canvas.drawImageRect(
+          tarotImg,
+          Rect.fromLTWH(0, 0, tarotImg.width.toDouble(), tarotImg.height.toDouble()),
+          imgDst,
+          Paint(),
+        );
+      } else {
+        tp.text = TextSpan(
+          text: tarot.toUpperCase(),
+          style: TextStyle(
+            color: isWinner ? Colors.black : const Color(0xFFc9a84c),
+            fontSize: 10,
+          ),
+        );
+        tp.layout();
+        tp.paint(canvas, Offset(cardX + (cardWidth - tp.width) / 2, cardY + 30));
+      }
 
-      // Label (wrapped)
+      // Label (below tarot image)
       tp.text = TextSpan(
         text: label,
         style: TextStyle(
           color: isWinner ? Colors.black : Colors.white,
-          fontSize: 11,
+          fontSize: 10,
         ),
       );
       tp.layout(maxWidth: cardWidth - 12);
-      tp.paint(canvas, Offset(cardX + 6, cardY + 60));
+      tp.paint(canvas, Offset(cardX + 6, cardY + 80));
 
       // Tally count
       final count = tallies[optionId] ?? 0;

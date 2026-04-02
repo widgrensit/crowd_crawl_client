@@ -11,10 +11,9 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _serverController = TextEditingController(text: 'http://localhost:8082');
+  final _serverUrl = 'http://localhost:8083';
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _matchIdController = TextEditingController();
   String? _error;
   bool _loading = false;
 
@@ -22,7 +21,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() { _loading = true; _error = null; });
 
     try {
-      final server = _serverController.text.trim();
+      final server = _serverUrl;
       final resp = await http.post(
         Uri.parse('$server/api/v1/auth/login'),
         headers: {'Content-Type': 'application/json'},
@@ -53,7 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() { _loading = true; _error = null; });
 
     try {
-      final server = _serverController.text.trim();
+      final server = _serverUrl;
       final resp = await http.post(
         Uri.parse('$server/api/v1/auth/register'),
         headers: {'Content-Type': 'application/json'},
@@ -80,23 +79,43 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _enterGame(String server, String token, String playerId) {
-    final matchId = _matchIdController.text.trim();
-    if (matchId.isEmpty) {
-      setState(() => _error = 'Enter a match ID');
-      return;
-    }
+  Future<void> _enterGame(String server, String token, String playerId) async {
+    setState(() { _loading = true; _error = null; });
 
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => GameScreen(
-          token: token,
-          playerId: playerId,
-          matchId: matchId,
-          serverUrl: server,
+    try {
+      // Create a new match on the server
+      final resp = await http.post(
+        Uri.parse('$server/api/v1/crowd_crawl/match'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (resp.statusCode != 200) {
+        setState(() => _error = 'Failed to create match: ${resp.statusCode}');
+        return;
+      }
+
+      final matchData = jsonDecode(resp.body) as Map<String, dynamic>;
+      final matchId = matchData['match_id'] as String;
+
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => GameScreen(
+            token: token,
+            playerId: playerId,
+            matchId: matchId,
+            serverUrl: server,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -126,12 +145,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 32),
               TextField(
-                controller: _serverController,
-                decoration: const InputDecoration(labelText: 'Server URL'),
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(height: 12),
-              TextField(
                 controller: _usernameController,
                 decoration: const InputDecoration(labelText: 'Username'),
                 style: const TextStyle(color: Colors.white),
@@ -141,12 +154,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: _passwordController,
                 decoration: const InputDecoration(labelText: 'Password'),
                 obscureText: true,
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _matchIdController,
-                decoration: const InputDecoration(labelText: 'Match ID (or create new)'),
                 style: const TextStyle(color: Colors.white),
               ),
               const SizedBox(height: 24),
@@ -188,10 +195,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _serverController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
-    _matchIdController.dispose();
     super.dispose();
   }
 }

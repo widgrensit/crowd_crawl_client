@@ -12,7 +12,7 @@ class DungeonRoom extends PositionComponent {
   @override
   Future<void> onLoad() async {
     await super.onLoad();
-    position = Vector2(32, 32);
+    position = Vector2(32, 56);
   }
 
   void updateFromServer(Map<String, dynamic> roomData) {
@@ -35,41 +35,70 @@ class DungeonRoom extends PositionComponent {
       final row = tiles[y];
       for (int x = 0; x < row.length; x++) {
         final tile = row[x];
-        final rect = Rect.fromLTWH(
-          x * tileSize,
-          y * tileSize,
-          tileSize,
-          tileSize,
-        );
+        final dst = Rect.fromLTWH(x * tileSize, y * tileSize, tileSize, tileSize);
 
-        final paint = Paint();
+        // Styled tile rendering
         switch (tile) {
           case 'wall':
-            paint.color = const Color(0xFF4a3728);
+            canvas.drawRect(dst, Paint()..color = const Color(0xFF5c3d2e));
+            // Brick pattern
+            if ((x + y) % 2 == 0) {
+              canvas.drawRect(dst, Paint()..color = const Color(0xFF4a3220));
+            }
+            // Dark edge
+            canvas.drawRect(dst, Paint()
+              ..color = const Color(0x33000000)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1);
           case 'floor':
-            paint.color = const Color(0xFF2d2d3d);
+            final shade = ((x + y) % 2 == 0) ? 0xFF3a3a4e : 0xFF2d2d3d;
+            canvas.drawRect(dst, Paint()..color = Color(shade));
+            // Subtle grid
+            canvas.drawRect(dst, Paint()
+              ..color = const Color(0x11ffffff)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 0.5);
           default:
-            paint.color = const Color(0xFF1a1a2e);
+            canvas.drawRect(dst, Paint()..color = const Color(0xFF1a1a2e));
         }
-        canvas.drawRect(rect, paint);
-
-        // Grid lines
-        final gridPaint = Paint()
-          ..color = const Color(0x22ffffff)
-          ..style = PaintingStyle.stroke;
-        canvas.drawRect(rect, gridPaint);
       }
     }
 
-    // Draw doors
-    final doorPaint = Paint()..color = const Color(0xFFc9a84c);
+    // Draw doors with highlight
     for (final door in doors) {
       final dx = (door['x'] as int? ?? 0) * tileSize;
       final dy = (door['y'] as int? ?? 0) * tileSize;
+
+      // Door glow
       canvas.drawRect(
         Rect.fromLTWH(dx, dy, tileSize, tileSize),
-        doorPaint,
+        Paint()
+          ..color = const Color(0x44ffd700)
+          ..style = PaintingStyle.fill,
       );
+      // Door border
+      canvas.drawRect(
+        Rect.fromLTWH(dx, dy, tileSize, tileSize),
+        Paint()
+          ..color = const Color(0xFFc9a84c)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+
+      // Door label
+      final label = door['label'] as String? ?? '';
+      if (label.isNotEmpty) {
+        final tp = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: const TextStyle(color: Color(0xFFffd700), fontSize: 8),
+          ),
+          textDirection: TextDirection.ltr,
+        );
+        tp.layout(maxWidth: tileSize * 3);
+        tp.paint(canvas, Offset(dx, dy - 10));
+      }
     }
   }
+
 }
