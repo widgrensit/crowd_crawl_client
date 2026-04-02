@@ -11,28 +11,37 @@ import 'enemy_component.dart';
 import 'hud.dart';
 import 'vote_overlay.dart';
 import 'combat_flash.dart';
+import 'game_over_overlay.dart';
 
 class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDetection {
   final String token;
   final String playerId;
   final String matchId;
   final String serverUrl;
+  final VoidCallback? onPlayAgain;
 
   late AsobiConnection connection;
   late DungeonRoom dungeonRoom;
   late HeroComponent hero;
   late Hud hud;
   VoteOverlay? voteOverlay;
+  GameOverOverlay? gameOverOverlay;
+  _FloorTransitionOverlay? _floorOverlay;
 
   Map<String, dynamic> gameState = {};
   List<EnemyComponent> enemies = [];
   StreamSubscription? _eventSub;
+
+  int currentTarget = 0;
+  int _lastFloor = 1;
+  bool _gameOverShown = false;
 
   CrowdCrawlFlameGame({
     required this.token,
     required this.playerId,
     required this.matchId,
     required this.serverUrl,
+    this.onPlayAgain,
   });
 
   @override
@@ -82,11 +91,9 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
     final newHp = heroData['hp'] as int? ?? _lastHeroHp;
     final enemyList = state['enemies'] as List<dynamic>? ?? [];
 
-    // Flash red when hero takes damage
     if (newHp < _lastHeroHp) {
       add(CombatFlash(color: const Color(0x44ff0000)));
     }
-    // Flash white when enemy is killed
     if (enemyList.length < _lastEnemyCount) {
       add(CombatFlash(color: const Color(0x33ffffff), lifetime: 0.1));
     }
@@ -101,7 +108,34 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
       dungeonRoom.updateFromServer(roomData);
     }
 
-    _updateEnemies(state['enemies'] as List<dynamic>? ?? []);
+    // Update features from top-level state (visible_features filtered by server)
+    final features = (state['features'] as List<dynamic>? ?? [])
+        .map((f) => f as Map<String, dynamic>)
+        .toList();
+    dungeonRoom.updateFeatures(features);
+
+    _updateEnemies(enemyList);
+
+    // Floor transition detection
+    final newFloor = state['floor'] as int? ?? _lastFloor;
+    if (newFloor > _lastFloor) {
+      _showFloorTransition(newFloor);
+    }
+    _lastFloor = newFloor;
+
+    // Clamp target index
+    if (enemies.isNotEmpty) {
+      currentTarget = currentTarget.clamp(0, enemies.length - 1);
+    } else {
+      currentTarget = 0;
+    }
+    _updateTargetIndicators();
+
+    // Game over
+    final phase = state['phase'] as String? ?? 'exploring';
+    if ((phase == 'dead' || phase == 'won') && !_gameOverShown) {
+      _showGameOver(state, phase == 'won');
+    }
   }
 
   void _updateEnemies(List<dynamic> enemyData) {
@@ -111,10 +145,9 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
       final id = d['id'] as int? ?? 0;
       serverIds.add(id);
 
-      // Update existing or create new
       final existing = enemies.where((e) => e.enemyId == id).firstOrNull;
       if (existing != null) {
-        existing.hp = d['hp'] as int? ?? existing.hp;
+        existing.updateFromServer(d);
       } else {
         final enemy = EnemyComponent.fromServer(d, enemies.length);
         enemies.add(enemy);
@@ -122,12 +155,41 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
       }
     }
 
-    // Remove dead enemies (not in server list)
     final dead = enemies.where((e) => !serverIds.contains(e.enemyId)).toList();
     for (final e in dead) {
       e.removeFromParent();
       enemies.remove(e);
     }
+  }
+
+  void _updateTargetIndicators() {
+    for (int i = 0; i < enemies.length; i++) {
+      enemies[i].isTargeted = (i == currentTarget);
+    }
+  }
+
+  void _showFloorTransition(int newFloor) {
+    _floorOverlay?.removeFromParent();
+    _floorOverlay = _FloorTransitionOverlay(floor: newFloor);
+    add(_floorOverlay!);
+  }
+
+  void _showGameOver(Map<String, dynamic> state, bool victory) {
+    _gameOverShown = true;
+    gameOverOverlay?.removeFromParent();
+    gameOverOverlay = GameOverOverlay(
+      victory: victory,
+      score: state['score'] as int? ?? 0,
+      floorsCleared: (state['floor'] as int? ?? 1) - 1,
+      roomsCleared: state['rooms_cleared'] as int? ?? 0,
+      enemiesKilled: state['enemies_killed'] as int? ?? 0,
+      gold: state['gold'] as int? ?? 0,
+      boonsCollected: (state['inventory'] as List<dynamic>? ?? []).length,
+      onPlayAgain: () {
+        onPlayAgain?.call();
+      },
+    );
+    add(gameOverOverlay!);
   }
 
   void _showVote(Map<String, dynamic> payload) {
@@ -152,30 +214,81 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
 
   @override
   KeyEventResult onKeyEvent(KeyEvent event, Set<LogicalKeyboardKey> keysPressed) {
-    if (event is KeyDownEvent) {
-      String? direction;
-      if (keysPressed.contains(LogicalKeyboardKey.arrowUp) ||
-          keysPressed.contains(LogicalKeyboardKey.keyW)) {
-        direction = 'up';
-      } else if (keysPressed.contains(LogicalKeyboardKey.arrowDown) ||
-          keysPressed.contains(LogicalKeyboardKey.keyS)) {
-        direction = 'down';
-      } else if (keysPressed.contains(LogicalKeyboardKey.arrowLeft) ||
-          keysPressed.contains(LogicalKeyboardKey.keyA)) {
-        direction = 'left';
-      } else if (keysPressed.contains(LogicalKeyboardKey.arrowRight) ||
-          keysPressed.contains(LogicalKeyboardKey.keyD)) {
-        direction = 'right';
-      } else if (keysPressed.contains(LogicalKeyboardKey.space)) {
-        connection.sendInput({'action': 'attack'});
-        return KeyEventResult.handled;
-      }
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (_gameOverShown) return KeyEventResult.ignored;
 
-      if (direction != null) {
-        connection.sendInput({'action': 'move', 'direction': direction});
+    // Movement
+    String? direction;
+    if (keysPressed.contains(LogicalKeyboardKey.arrowUp) ||
+        keysPressed.contains(LogicalKeyboardKey.keyW)) {
+      direction = 'up';
+    } else if (keysPressed.contains(LogicalKeyboardKey.arrowDown) ||
+        keysPressed.contains(LogicalKeyboardKey.keyS)) {
+      direction = 'down';
+    } else if (keysPressed.contains(LogicalKeyboardKey.arrowLeft) ||
+        keysPressed.contains(LogicalKeyboardKey.keyA)) {
+      direction = 'left';
+    } else if (keysPressed.contains(LogicalKeyboardKey.arrowRight) ||
+        keysPressed.contains(LogicalKeyboardKey.keyD)) {
+      direction = 'right';
+    }
+
+    if (direction != null) {
+      connection.sendInput({'action': 'move', 'direction': direction});
+      return KeyEventResult.handled;
+    }
+
+    // Attack (space) — with current target
+    if (keysPressed.contains(LogicalKeyboardKey.space)) {
+      connection.sendInput({'action': 'attack', 'target': currentTarget});
+      return KeyEventResult.handled;
+    }
+
+    // Interact (E) — chests, fountains
+    if (keysPressed.contains(LogicalKeyboardKey.keyE)) {
+      connection.sendInput({'action': 'interact'});
+      return KeyEventResult.handled;
+    }
+
+    // Heal (H)
+    if (keysPressed.contains(LogicalKeyboardKey.keyH)) {
+      connection.sendInput({'action': 'heal'});
+      return KeyEventResult.handled;
+    }
+
+    // Dodge (Q)
+    if (keysPressed.contains(LogicalKeyboardKey.keyQ)) {
+      connection.sendInput({'action': 'dodge'});
+      return KeyEventResult.handled;
+    }
+
+    // Target specific enemy (1-5)
+    for (int i = 0; i < 5; i++) {
+      final key = [
+        LogicalKeyboardKey.digit1,
+        LogicalKeyboardKey.digit2,
+        LogicalKeyboardKey.digit3,
+        LogicalKeyboardKey.digit4,
+        LogicalKeyboardKey.digit5,
+      ][i];
+      if (keysPressed.contains(key)) {
+        if (i < enemies.length) {
+          currentTarget = i;
+          _updateTargetIndicators();
+        }
         return KeyEventResult.handled;
       }
     }
+
+    // Cycle target (Tab)
+    if (keysPressed.contains(LogicalKeyboardKey.tab)) {
+      if (enemies.isNotEmpty) {
+        currentTarget = (currentTarget + 1) % enemies.length;
+        _updateTargetIndicators();
+      }
+      return KeyEventResult.handled;
+    }
+
     return KeyEventResult.ignored;
   }
 
@@ -188,4 +301,61 @@ class CrowdCrawlFlameGame extends FlameGame with KeyboardEvents, HasCollisionDet
 
   @override
   Color backgroundColor() => const Color(0xFF1a1a2e);
+}
+
+class _FloorTransitionOverlay extends PositionComponent with HasGameReference {
+  final int floor;
+  double elapsed = 0;
+  static const double duration = 2.0;
+
+  _FloorTransitionOverlay({required this.floor});
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+    elapsed += dt;
+    if (elapsed >= duration) {
+      removeFromParent();
+    }
+  }
+
+  @override
+  void render(Canvas canvas) {
+    super.render(canvas);
+    final alpha = (1.0 - elapsed / duration).clamp(0.0, 1.0);
+    final w = game.size.x;
+    final h = game.size.y;
+
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, w, h),
+      Paint()..color = Color.fromARGB((alpha * 180).toInt(), 0, 0, 0),
+    );
+
+    final tp = TextPainter(
+      text: TextSpan(
+        text: 'FLOOR $floor',
+        style: TextStyle(
+          color: Color.fromARGB((alpha * 255).toInt(), 255, 215, 0),
+          fontSize: 48,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    tp.layout();
+    tp.paint(canvas, Offset((w - tp.width) / 2, h * 0.4));
+
+    final tp2 = TextPainter(
+      text: TextSpan(
+        text: 'Cleared!',
+        style: TextStyle(
+          color: Color.fromARGB((alpha * 200).toInt(), 255, 255, 255),
+          fontSize: 24,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    tp2.layout();
+    tp2.paint(canvas, Offset((w - tp2.width) / 2, h * 0.4 + 56));
+  }
 }

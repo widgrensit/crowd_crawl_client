@@ -9,9 +9,6 @@ class HeroComponent extends PositionComponent {
   static const int frameW = 26;
   static const int frameH = 36;
 
-  // Dwarf1 is first character in the sheet (top-left block)
-  // Character block at (0,0), each block is 78x144
-  // 3 frames across, 4 directions down: down=0, left=1, right=2, up=3
   static const int charX = 0;
   static const int charY = 0;
 
@@ -19,12 +16,17 @@ class HeroComponent extends PositionComponent {
   double serverY = 2.0;
   int hp = 100;
   int maxHp = 100;
+  int gold = 0;
+  List<String> buffs = [];
+  Map<String, dynamic> equipment = {};
 
   ui.Image? spriteSheet;
-  int direction = 0; // 0=down, 1=left, 2=right, 3=up
-  int frame = 1; // 0,1,2 walk cycle (1 = idle)
-  double animTimer = 0;
-  String lastDir = '';
+  int direction = 0;
+  int frame = 1;
+
+  // Gold pickup float text
+  double _goldFloatTimer = 0;
+  int _goldDelta = 0;
 
   @override
   Future<void> onLoad() async {
@@ -39,25 +41,36 @@ class HeroComponent extends PositionComponent {
     final newX = (heroData['x'] as num?)?.toDouble() ?? serverX;
     final newY = (heroData['y'] as num?)?.toDouble() ?? serverY;
 
-    // Determine direction from movement
     final dx = newX - serverX;
     final dy = newY - serverY;
     if (dx.abs() > 0.1 || dy.abs() > 0.1) {
       if (dx.abs() > dy.abs()) {
-        direction = dx > 0 ? 2 : 1; // right : left
+        direction = dx > 0 ? 2 : 1;
       } else {
-        direction = dy > 0 ? 0 : 3; // down : up
+        direction = dy > 0 ? 0 : 3;
       }
-      // Advance walk cycle
       frame = (frame + 1) % 3;
     } else {
-      frame = 1; // idle
+      frame = 1;
     }
 
     serverX = newX;
     serverY = newY;
     hp = heroData['hp'] as int? ?? hp;
     maxHp = heroData['max_hp'] as int? ?? maxHp;
+
+    final newGold = heroData['gold'] as int? ?? gold;
+    if (newGold > gold && gold > 0) {
+      _goldDelta = newGold - gold;
+      _goldFloatTimer = 1.2;
+    }
+    gold = newGold;
+
+    buffs = (heroData['buffs'] as List<dynamic>? ?? [])
+        .map((b) => b.toString())
+        .toList();
+    equipment = heroData['equipment'] as Map<String, dynamic>? ?? equipment;
+
     _updatePosition();
   }
 
@@ -69,8 +82,41 @@ class HeroComponent extends PositionComponent {
   }
 
   @override
+  void update(double dt) {
+    super.update(dt);
+    if (_goldFloatTimer > 0) {
+      _goldFloatTimer -= dt;
+    }
+  }
+
+  @override
   void render(Canvas canvas) {
     super.render(canvas);
+
+    // Buff auras
+    for (final buff in buffs) {
+      final auraColor = switch (buff) {
+        'rage' => const Color(0x33f44336),
+        'shield' => const Color(0x3342a5f5),
+        'haste' => const Color(0x3366bb6a),
+        _ => const Color(0x22ffffff),
+      };
+      canvas.drawCircle(
+        Offset(renderSize / 2, renderSize / 2),
+        renderSize * 0.7,
+        Paint()..color = auraColor,
+      );
+    }
+
+    // Weapon glow
+    final weapon = equipment['weapon'];
+    if (weapon != null && weapon != 'none') {
+      canvas.drawCircle(
+        Offset(renderSize * 0.8, renderSize * 0.3),
+        4,
+        Paint()..color = const Color(0x55ffab40),
+      );
+    }
 
     if (spriteSheet != null) {
       final srcX = (charX + frame * frameW).toDouble();
@@ -95,5 +141,24 @@ class HeroComponent extends PositionComponent {
       Rect.fromLTWH(0, barY, renderSize * hpFraction, 4),
       Paint()..color = hpFraction > 0.3 ? const Color(0xFF4caf50) : const Color(0xFFf44336),
     );
+
+    // Gold pickup float text
+    if (_goldFloatTimer > 0) {
+      final alpha = (_goldFloatTimer / 1.2 * 255).clamp(0, 255).toInt();
+      final floatY = -20.0 - (1.2 - _goldFloatTimer) * 20;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '+${_goldDelta}g',
+          style: TextStyle(
+            color: Color.fromARGB(alpha, 255, 215, 0),
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      tp.paint(canvas, Offset((renderSize - tp.width) / 2, floatY));
+    }
   }
 }

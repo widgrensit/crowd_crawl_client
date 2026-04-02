@@ -4,35 +4,40 @@ import 'package:flame/flame.dart';
 import 'package:flutter/material.dart';
 import 'dungeon_room.dart';
 
-/// Maps enemy sprite names to sheet file + character index (0-7)
 const _enemySprites = {
-  'slime': ('characters/animals1.png', 0),     // wolf/cat
-  'bat': ('characters/animals1.png', 4),        // fox
-  'skeleton': ('characters/military.png', 0),   // soldier
-  'goblin': ('characters/elf.png', 4),          // dark elf
-  'knight': ('characters/military.png', 4),     // armored
+  'slime': ('characters/animals1.png', 0),
+  'bat': ('characters/animals1.png', 4),
+  'skeleton': ('characters/military.png', 0),
+  'goblin': ('characters/elf.png', 4),
+  'knight': ('characters/military.png', 4),
 };
 
 class EnemyComponent extends PositionComponent {
-  static const double renderSize = 28.0;
-  static const int frameW = 26;
-  static const int frameH = 36;
+  static const double baseRenderSize = 28.0;
 
   final String name;
   final String spriteName;
+  final String behavior;
+  final bool isBoss;
   int hp;
   final int maxHp;
   final int enemyId;
-  final int serverX;
-  final int serverY;
+  int serverX;
+  int serverY;
+  bool isTargeted = false;
 
   ui.Image? spriteSheet;
   int frame = 1;
   double animTimer = 0;
+  double targetPulse = 0;
+
+  double get renderSize => isBoss ? baseRenderSize * 1.5 : baseRenderSize;
 
   EnemyComponent({
     required this.name,
     required this.spriteName,
+    required this.behavior,
+    required this.isBoss,
     required this.hp,
     required this.maxHp,
     required this.enemyId,
@@ -44,12 +49,21 @@ class EnemyComponent extends PositionComponent {
     return EnemyComponent(
       name: data['name'] as String? ?? 'Enemy',
       spriteName: data['sprite'] as String? ?? 'slime',
+      behavior: data['behavior'] as String? ?? 'melee',
+      isBoss: data['is_boss'] as bool? ?? false,
       hp: data['hp'] as int? ?? 10,
       maxHp: data['hp'] as int? ?? 10,
       enemyId: data['id'] as int? ?? idx,
       serverX: data['x'] as int? ?? (3 + idx * 2),
       serverY: data['y'] as int? ?? (1 + idx % 2),
     );
+  }
+
+  void updateFromServer(Map<String, dynamic> data) {
+    hp = data['hp'] as int? ?? hp;
+    serverX = data['x'] as int? ?? serverX;
+    serverY = data['y'] as int? ?? serverY;
+    _positionInRoom();
   }
 
   @override
@@ -77,16 +91,52 @@ class EnemyComponent extends PositionComponent {
       animTimer = 0;
       frame = (frame + 1) % 3;
     }
+    targetPulse += dt * 4;
   }
+
+  Color get _behaviorColor => switch (behavior) {
+    'ranged' => const Color(0xFFce93d8),
+    'tank' => const Color(0xFF90a4ae),
+    _ => const Color(0xFFef5350),
+  };
 
   @override
   void render(Canvas canvas) {
     super.render(canvas);
 
+    final rs = renderSize;
+
+    // Target indicator
+    if (isTargeted) {
+      final pulse = 0.8 + 0.2 * (1 + (targetPulse % 6.28 - 3.14).abs() / 3.14);
+      final radius = rs * 0.6 * pulse;
+      canvas.drawCircle(
+        Offset(rs / 2, rs / 2),
+        radius,
+        Paint()
+          ..color = const Color(0x44ffeb3b)
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        Offset(rs / 2, rs / 2),
+        radius,
+        Paint()
+          ..color = const Color(0xCCffeb3b)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+    }
+
+    // Behavior color tint behind sprite
+    canvas.drawCircle(
+      Offset(rs / 2, rs / 2),
+      rs * 0.3,
+      Paint()..color = _behaviorColor.withAlpha(40),
+    );
+
     if (spriteSheet != null) {
       final entry = _enemySprites[spriteName] ?? _enemySprites['slime']!;
       final charIdx = entry.$2;
-      // Character position in sheet: 4 columns, 2 rows of characters
       final charCol = charIdx % 4;
       final charRow = charIdx ~/ 4;
       final blockW = spriteSheet!.width ~/ 4;
@@ -95,36 +145,52 @@ class EnemyComponent extends PositionComponent {
       final fH = blockH ~/ 4;
 
       final srcX = (charCol * blockW + frame * fW).toDouble();
-      final srcY = (charRow * blockH).toDouble(); // face down
+      final srcY = (charRow * blockH).toDouble();
       final src = Rect.fromLTWH(srcX, srcY, fW.toDouble(), fH.toDouble());
       final dst = Rect.fromCenter(
-        center: Offset(renderSize / 2, renderSize / 2),
-        width: renderSize,
-        height: renderSize * (fH / fW),
+        center: Offset(rs / 2, rs / 2),
+        width: rs,
+        height: rs * (fH / fW),
       );
       canvas.drawImageRect(spriteSheet!, src, dst, Paint());
     }
 
+    // Boss crown indicator
+    if (isBoss) {
+      final tp = TextPainter(
+        text: const TextSpan(
+          text: '\u{1F451}',
+          style: TextStyle(fontSize: 14),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      tp.paint(canvas, Offset((rs - tp.width) / 2, -22));
+    }
+
     // HP bar
     final hpFraction = maxHp > 0 ? hp / maxHp : 0.0;
+    final barY = isBoss ? -10.0 : -8.0;
+    final barW = rs;
     canvas.drawRect(
-      Rect.fromLTWH(0, -8, renderSize, 3),
+      Rect.fromLTWH(0, barY, barW, 3),
       Paint()..color = const Color(0xFF333333),
     );
     canvas.drawRect(
-      Rect.fromLTWH(0, -8, renderSize * hpFraction, 3),
+      Rect.fromLTWH(0, barY, barW * hpFraction, 3),
       Paint()..color = const Color(0xFFf44336),
     );
 
-    // Name
+    // Name + behavior label
+    final nameLabel = isBoss ? '\u2605 $name' : name;
     final tp = TextPainter(
       text: TextSpan(
-        text: name,
-        style: const TextStyle(color: Colors.white70, fontSize: 8),
+        text: nameLabel,
+        style: TextStyle(color: _behaviorColor, fontSize: isBoss ? 10.0 : 8.0),
       ),
       textDirection: TextDirection.ltr,
     );
     tp.layout();
-    tp.paint(canvas, Offset((renderSize - tp.width) / 2, -16));
+    tp.paint(canvas, Offset((rs - tp.width) / 2, barY - 12));
   }
 }

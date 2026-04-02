@@ -149,13 +149,21 @@ class VoteOverlay extends PositionComponent with HasGameReference, TapCallbacks 
         Paint()..color = cardColor,
       );
 
-      // Card border
+      // Card border colored by rarity
+      final rarity = option['rarity'] as String? ?? 'common';
+      final rarityBorderColor = isWinner
+          ? Colors.amber
+          : switch (rarity) {
+              'rare' => const Color(0xFF42a5f5),
+              'legendary' => const Color(0xFFffd700),
+              _ => const Color(0xFF8d6e63),
+            };
       canvas.drawRRect(
         RRect.fromRectAndRadius(cardRect, const Radius.circular(8)),
         Paint()
-          ..color = isWinner ? Colors.amber : const Color(0xFF8d6e63)
+          ..color = rarityBorderColor
           ..style = PaintingStyle.stroke
-          ..strokeWidth = isWinner ? 3 : 1.5,
+          ..strokeWidth = isWinner ? 3 : (rarity == 'legendary' ? 2.5 : 1.5),
       );
 
       // Tarot image
