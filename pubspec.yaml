@@ -1,0 +1,31 @@
+name: crowd_crawl_client
+description: "Crowd Crawl — audience-driven dungeon crawler on Asobi"
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flame: ^1.22.0
+  asobi:
+    git:
+      url: https://github.com/widgrensit/asobi-dart.git
+      ref: main
+  web_socket_channel: ^3.0.0
+  http: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/tiles/
+    - assets/characters/
+    - assets/tarot/
+    - assets/effects/
