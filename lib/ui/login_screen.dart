@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../main.dart';
@@ -11,93 +12,64 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _serverUrl = 'http://localhost:8083';
-  final _usernameController = TextEditingController();
-  final _passwordController = TextEditingController();
+  static String get _serverUrl {
+    final base = Uri.base;
+    if (base.host == 'localhost' || base.host == '127.0.0.1') {
+      return 'http://localhost:8083';
+    }
+    return '${base.scheme}://${base.host}';
+  }
   String? _error;
   bool _loading = false;
 
-  Future<void> _login() async {
-    setState(() { _loading = true; _error = null; });
-
-    try {
-      final server = _serverUrl;
-      final resp = await http.post(
-        Uri.parse('$server/api/v1/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': _usernameController.text.trim(),
-          'password': _passwordController.text,
-        }),
-      );
-
-      if (resp.statusCode == 200) {
-        final body = jsonDecode(resp.body) as Map<String, dynamic>;
-        _enterGame(
-          server,
-          body['session_token'] as String,
-          body['player_id'] as String,
-        );
-      } else {
-        setState(() => _error = 'Login failed: ${resp.statusCode}');
-      }
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      setState(() => _loading = false);
-    }
+  @override
+  void initState() {
+    super.initState();
+    _autoStart();
   }
 
-  Future<void> _register() async {
+  Future<void> _autoStart() async {
     setState(() { _loading = true; _error = null; });
 
     try {
-      final server = _serverUrl;
-      final resp = await http.post(
-        Uri.parse('$server/api/v1/auth/register'),
+      // Generate random guest name
+      final guest = 'hero_${Random().nextInt(999999)}';
+      final password = 'guest_${Random().nextInt(999999)}';
+
+      // Try register (ignore if already exists)
+      final regResp = await http.post(
+        Uri.parse('$_serverUrl/api/v1/auth/register'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': _usernameController.text.trim(),
-          'password': _passwordController.text,
-        }),
+        body: jsonEncode({'username': guest, 'password': password}),
       );
 
-      if (resp.statusCode == 200) {
-        final body = jsonDecode(resp.body) as Map<String, dynamic>;
-        _enterGame(
-          server,
-          body['session_token'] as String,
-          body['player_id'] as String,
-        );
+      String token;
+      String playerId;
+
+      if (regResp.statusCode == 200) {
+        final body = jsonDecode(regResp.body) as Map<String, dynamic>;
+        token = body['session_token'] as String;
+        playerId = body['player_id'] as String;
       } else {
-        setState(() => _error = 'Register failed: ${resp.statusCode}');
+        setState(() => _error = 'Failed to connect: ${regResp.statusCode}');
+        return;
       }
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      setState(() => _loading = false);
-    }
-  }
 
-  Future<void> _enterGame(String server, String token, String playerId) async {
-    setState(() { _loading = true; _error = null; });
-
-    try {
-      // Create a new match on the server
-      final resp = await http.post(
-        Uri.parse('$server/api/v1/crowd_crawl/match'),
+      // Create match
+      final matchResp = await http.post(
+        Uri.parse('$_serverUrl/api/v1/crowd_crawl/match'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
       );
 
-      if (resp.statusCode != 200) {
-        setState(() => _error = 'Failed to create match: ${resp.statusCode}');
+      if (matchResp.statusCode != 200) {
+        setState(() => _error = 'Failed to create match: ${matchResp.statusCode}');
         return;
       }
 
-      final matchData = jsonDecode(resp.body) as Map<String, dynamic>;
+      final matchData = jsonDecode(matchResp.body) as Map<String, dynamic>;
       final matchId = matchData['match_id'] as String;
 
       if (!mounted) return;
@@ -107,7 +79,7 @@ class _LoginScreenState extends State<LoginScreen> {
             token: token,
             playerId: playerId,
             matchId: matchId,
-            serverUrl: server,
+            serverUrl: _serverUrl,
           ),
         ),
       );
@@ -123,80 +95,44 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF1a1a2e),
       body: Center(
-        child: Container(
-          width: 400,
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'CROWD CRAWL',
-                style: TextStyle(
-                  fontSize: 36,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.amber,
-                  letterSpacing: 4,
-                ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'CROWD CRAWL',
+              style: TextStyle(
+                fontSize: 48,
+                fontWeight: FontWeight.bold,
+                color: Colors.amber,
+                letterSpacing: 6,
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'The crowd decides your fate',
-                style: TextStyle(color: Colors.white54, fontSize: 14),
-              ),
-              const SizedBox(height: 32),
-              TextField(
-                controller: _usernameController,
-                decoration: const InputDecoration(labelText: 'Username'),
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _passwordController,
-                decoration: const InputDecoration(labelText: 'Password'),
-                obscureText: true,
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(height: 24),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                ),
-              Row(
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'The crowd decides your fate',
+              style: TextStyle(color: Colors.white54, fontSize: 16),
+            ),
+            const SizedBox(height: 48),
+            if (_loading)
+              const Column(
                 children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _loading ? null : _login,
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-                      child: const Text('LOGIN', style: TextStyle(color: Colors.black)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _loading ? null : _register,
-                      style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.amber)),
-                      child: const Text('REGISTER', style: TextStyle(color: Colors.amber)),
-                    ),
-                  ),
+                  CircularProgressIndicator(color: Colors.amber),
+                  SizedBox(height: 16),
+                  Text('Entering dungeon...', style: TextStyle(color: Colors.white38)),
                 ],
               ),
-              if (_loading)
-                const Padding(
-                  padding: EdgeInsets.only(top: 16),
-                  child: CircularProgressIndicator(color: Colors.amber),
-                ),
+            if (_error != null) ...[
+              Text(_error!, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _autoStart,
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+                child: const Text('RETRY', style: TextStyle(color: Colors.black)),
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    _passwordController.dispose();
-    super.dispose();
   }
 }
